@@ -1,0 +1,1336 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bollette Parser - Analizzatore Bollette Elettriche</title>
+    
+    <!-- React and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    
+    <!-- SheetJS for Excel export -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow-x: hidden;
+        }
+        
+        #root {
+            min-height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        
+        // Lucide icon components
+        const Upload = () => <i data-lucide="upload"></i>;
+        const FileText = () => <i data-lucide="file-text"></i>;
+        const Download = () => <i data-lucide="download"></i>;
+        const Database = () => <i data-lucide="database"></i>;
+        const Zap = () => <i data-lucide="zap"></i>;
+        const TrendingUp = () => <i data-lucide="trending-up"></i>;
+        const Calendar = () => <i data-lucide="calendar"></i>;
+        const DollarSign = () => <i data-lucide="dollar-sign"></i>;
+        const Activity = () => <i data-lucide="activity"></i>;
+        const AlertCircle = () => <i data-lucide="alert-circle"></i>;
+        const Trash2 = () => <i data-lucide="trash-2"></i>;
+
+        function BolletteParser() {
+            const [pdfFile, setPdfFile] = useState(null);
+            const [extractedData, setExtractedData] = useState(null);
+            const [allBills, setAllBills] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState(null);
+            const [pdfJsLoaded, setPdfJsLoaded] = useState(false);
+
+            // Initialize Lucide icons
+            useEffect(() => {
+                lucide.createIcons();
+            });
+
+            // Load PDF.js library
+            useEffect(() => {
+                if (window.pdfjsLib) {
+                    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                    setPdfJsLoaded(true);
+                }
+            }, []);
+
+            // Parse PDF text to extract bill data
+            const parseBillData = (text) => {
+                const data = {
+                    // Dati base
+                    numeroFattura: '',
+                    periodoCompetenza: '',
+                    dataInizio: '',
+                    dataFine: '',
+                    
+                    // Consumi
+                    consumoTotalePeriodo: 0,
+                    consumoF1Periodo: 0,
+                    consumoF2Periodo: 0,
+                    consumoF3Periodo: 0,
+                    
+                    // Consumi annui
+                    consumoAnnuo: 0,
+                    consumoAnnuoF1: 0,
+                    consumoAnnuoF2: 0,
+                    consumoAnnuoF3: 0,
+                    dataInizioConsumoAnnuo: '',
+                    dataFineConsumoAnnuo: '',
+                    
+                    // Costi
+                    totaleDaPagare: 0,
+                    totaleNettoBolletta: 0,
+                    materiaEnergia: 0,
+                    canoneTV: 0,
+                    speseAltre: 0,
+                    iva: 0,
+                    sconti: 0,
+                    accise: 0,
+                    
+                    // Dettagli spese
+                    spesaVenditaEnergia: 0,
+                    spesaReteOneri: 0,
+                    quotaFissa: 0,
+                    quotaPotenza: 0,
+                    acciseIva: 0,
+                    oneriGenerali: 0,
+                    
+                    // Quota consumi e altri dettagli
+                    quotaConsumi: 0,
+                    prezzoMedioKwh: 0,
+                    totaleSpesaPeriodo: 0,
+                    
+                    // Tecnici
+                    potenzaImpegnata: 0,
+                    fornitore: '',
+                    tipoOfferta: '',
+                    codiceOfferta: '',
+                    
+                    // PUN
+                    punF1: [],
+                    punF2: [],
+                    punF3: [],
+                    
+                    // Calcolati
+                    sommeImporti: 0,
+                    costoKwh: 0,
+                    costoMateriaKwh: 0,
+                    costoCorrenteTotGiorno: 0,
+                    
+                    dataEstrazione: new Date().toISOString().split('T')[0]
+                };
+
+                try {
+                    // Extract Numero Fattura - more precise pattern
+                    const fatturaMatch = text.match(/N\.\s*Fattura\s+elettronica\s+valida\s+ai\s+fini\s+fiscali\s+(\d{12})/i);
+                    if (fatturaMatch) data.numeroFattura = fatturaMatch[1];
+
+                    // Extract Periodo di competenza - more precise
+                    const periodoMatch = text.match(/Periodo\s+di\s+competenza\s+(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/i);
+                    if (periodoMatch) {
+                        data.periodoCompetenza = `${periodoMatch[1]} - ${periodoMatch[2]}`;
+                        data.dataInizio = periodoMatch[1];
+                        data.dataFine = periodoMatch[2];
+                    }
+
+                    // Extract Totale da pagare
+                    const totaleDaPagareMatch = text.match(/TOTALE\s+DA\s+PAGARE\s+([\d,]+)\s*€/i);
+                    if (totaleDaPagareMatch) {
+                        data.totaleDaPagare = parseFloat(totaleDaPagareMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract Canone TV
+                    const canoneMatch = text.match(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?(\d+,\d+)\s*€/i);
+                    if (canoneMatch) {
+                        data.canoneTV = parseFloat(canoneMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract Totale bolletta (senza canone)
+                    const totaleBollettaMatch = text.match(/Totale\s+bolletta\s+([\d,]+)\s*€/i);
+                    if (totaleBollettaMatch) {
+                        data.totaleNettoBolletta = parseFloat(totaleBollettaMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract Consumo totale fatturato nel periodo
+                    const consumoPeriodoMatch = text.match(/Consumo\s+totale\s+fatturato\s+nel\s+periodo\s+([\d,]+)\s+kWh/i);
+                    if (consumoPeriodoMatch) {
+                        data.consumoTotalePeriodo = parseFloat(consumoPeriodoMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract Consumo Annuo con date e fasce
+                    const consumoAnnuoMatch = text.match(/Consumo\s+annuo\s+dal\s+(\d{2}\/\d{2}\/\d{4})\s+a\s+(\d{2}\/\d{2}\/\d{4})\s+([\d,.]+)\s+kWh\s+F1:\s+(\d+)\s+kWh\s+-\s+F2:\s+(\d+)\s+kWh\s+-\s+F3:\s+(\d+)\s+kWh?/i);
+                    if (consumoAnnuoMatch) {
+                        data.dataInizioConsumoAnnuo = consumoAnnuoMatch[1];
+                        data.dataFineConsumoAnnuo = consumoAnnuoMatch[2];
+                        data.consumoAnnuo = parseFloat(consumoAnnuoMatch[3].replace(/\./g, '').replace(',', '.'));
+                        data.consumoAnnuoF1 = parseInt(consumoAnnuoMatch[4]);
+                        data.consumoAnnuoF2 = parseInt(consumoAnnuoMatch[5]);
+                        data.consumoAnnuoF3 = parseInt(consumoAnnuoMatch[6]);
+                    }
+
+                    // Extract F1, F2, F3 del periodo dalla tabella CONSUMI
+                    const periodoConsumiMatch = text.match(/Periodo\s+Tipo\s+F1\s+F2\s+F3\s+Consumi\s+Fatturati.*?Effettivo\s+(\d+)\s+(\d+)\s+(\d+).*?Effettivo\s+(\d+)\s+(\d+)\s+(\d+)/s);
+                    if (periodoConsumiMatch) {
+                        data.consumoF1Periodo = parseInt(periodoConsumiMatch[1]) + parseInt(periodoConsumiMatch[4]);
+                        data.consumoF2Periodo = parseInt(periodoConsumiMatch[2]) + parseInt(periodoConsumiMatch[5]);
+                        data.consumoF3Periodo = parseInt(periodoConsumiMatch[3]) + parseInt(periodoConsumiMatch[6]);
+                    }
+
+                    // Extract Potenza impegnata
+                    const potenzaMatch = text.match(/Potenza\s+impegnata\s+([\d,]+)\s+kW/i);
+                    if (potenzaMatch) {
+                        data.potenzaImpegnata = parseFloat(potenzaMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract SCONTRINO - Quota per consumi
+                    const quotaConsumiMatch = text.match(/QUOTA\s+PER\s+CONSUMI\s+([\d,]+)\s+kWh\s+x\s+([\d,]+)\s+€\/kWh\s+([\d,]+)\s+€/i);
+                    if (quotaConsumiMatch) {
+                        data.prezzoMedioKwh = parseFloat(quotaConsumiMatch[2].replace(',', '.'));
+                        data.quotaConsumi = parseFloat(quotaConsumiMatch[3].replace(',', '.'));
+                    }
+
+                    // Extract spesa vendita energia (MATERIA ENERGIA)
+                    // Try multiple patterns to catch it
+                    let spesaVenditaMatch = text.match(/di\s+cui\s+spesa\s+per\s+vendita\s+energia\s+elettrica\s+[\d,]+\s+€\/kWh\s+([\d,]+)\s+€/i);
+                    if (!spesaVenditaMatch) {
+                        // Try alternative pattern from BOX DELL'OFFERTA
+                        spesaVenditaMatch = text.match(/di\s+cui\s+spesa\s+per\s+la\s+quota\s+per\s+consumi\s+([\d,]+)\s+€/i);
+                    }
+                    if (spesaVenditaMatch) {
+                        data.spesaVenditaEnergia = parseFloat(spesaVenditaMatch[1].replace(',', '.'));
+                        data.materiaEnergia = data.spesaVenditaEnergia; // Questa è la materia energia
+                    }
+
+                    // Extract spesa rete e oneri - from QUOTA PER CONSUMI section
+                    const spesaReteConsumiMatch = text.match(/QUOTA\s+PER\s+CONSUMI.*?di\s+cui\s+spesa\s+per\s+la\s+rete\s+e\s+gli\s+oneri.*?([\d,]+)\s+€/s);
+                    if (spesaReteConsumiMatch) {
+                        data.spesaReteOneri = parseFloat(spesaReteConsumiMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract Quota fissa (can be negative)
+                    const quotaFissaMatch = text.match(/(\d+)\s+Mesi\s+x\s+(-?\s*[\d,]+)\s+€\/Mese\s+(-?[\d,]+)\s+€/);
+                    if (quotaFissaMatch) {
+                        data.quotaFissa = parseFloat(quotaFissaMatch[3].replace(',', '.'));
+                    }
+
+                    // Extract Quota potenza
+                    const quotaPotenzaMatch = text.match(/([\d,]+)\s+Kw\s+per\s+\d+\s+Mesi\s+x\s+[\d,]+\s+€\/kW\/Mese\s+([\d,]+)\s+€/i);
+                    if (quotaPotenzaMatch) {
+                        data.quotaPotenza = parseFloat(quotaPotenzaMatch[2].replace(',', '.'));
+                    }
+
+                    // Extract Accise e IVA (together)
+                    const acciseIvaMatch = text.match(/Accise\s+e\s+Iva\s+([\d,]+)\s+€/i);
+                    if (acciseIvaMatch) {
+                        data.acciseIva = parseFloat(acciseIvaMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract separate Accise (Totale Imposte)
+                    const acciseMatch = text.match(/Totale\s+Imposte\s+([\d,]+)\s+€/i);
+                    if (acciseMatch) {
+                        data.accise = parseFloat(acciseMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract Oneri generali di sistema
+                    const oneriMatch = text.match(/Totale\s+Oneri\s+generali\s+di\s+sistema\s+([\d,]+)\s+€/i);
+                    if (oneriMatch) {
+                        data.oneriGenerali = parseFloat(oneriMatch[1].replace(',', '.'));
+                    }
+
+                    // Calcola IVA (10% su totale imponibile)
+                    if (data.acciseIva > 0 && data.accise > 0) {
+                        data.iva = data.acciseIva - data.accise;
+                    } else if (data.totaleNettoBolletta > 0) {
+                        // Stima IVA al 10%
+                        data.iva = data.totaleNettoBolletta * 0.10 / 1.10;
+                    }
+
+                    // Extract Offerta commerciale
+                    const offertaMatch = text.match(/OFFERTA\s+COMMERCIALE\s+([^\n]+)/i);
+                    if (offertaMatch) {
+                        data.tipoOfferta = offertaMatch[1].trim();
+                    }
+
+                    // Extract Codice offerta
+                    const codiceOffertaMatch = text.match(/Codice\s+offerta\s+([A-Z0-9_]+)/i);
+                    if (codiceOffertaMatch) {
+                        data.codiceOfferta = codiceOffertaMatch[1];
+                    }
+
+                    // Extract Totale spesa periodo
+                    const spesaPeriodoMatch = text.match(/TOTALE\s+SPESA\s+PER\s+IL\s+PERIODO\s+FATTURATO\s+([\d,]+)\s+€/i);
+                    if (spesaPeriodoMatch) {
+                        data.totaleSpesaPeriodo = parseFloat(spesaPeriodoMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract company name
+                    const fornitorMatch = text.match(/Illumia|ILLUMIA|Enel|ENEL|Eni|ENI|A2A|Edison|EDISON/);
+                    if (fornitorMatch) data.fornitore = fornitorMatch[0];
+
+                    // Extract PUN values for F1
+                    const punF1Matches = text.matchAll(/Corrispettivo\s+CELD\s+\(F1\).*?F1:\s+([\d,]+)\s+€\/kWh/gi);
+                    for (const match of punF1Matches) {
+                        data.punF1.push(parseFloat(match[1].replace(',', '.')));
+                    }
+
+                    // Extract PUN values for F2
+                    const punF2Matches = text.matchAll(/Corrispettivo\s+CELD\s+\(F2\).*?F2:\s+([\d,]+)\s+€\/kWh/gi);
+                    for (const match of punF2Matches) {
+                        data.punF2.push(parseFloat(match[1].replace(',', '.')));
+                    }
+
+                    // Extract PUN values for F3
+                    const punF3Matches = text.matchAll(/Corrispettivo\s+CELD\s+\(F3\).*?F3:\s+([\d,]+)\s+€\/kWh/gi);
+                    for (const match of punF3Matches) {
+                        data.punF3.push(parseFloat(match[1].replace(',', '.')));
+                    }
+
+                    // CALCOLI DERIVATI
+                    
+                    // Spese altre = rete + oneri + quota fissa + quota potenza
+                    data.speseAltre = data.spesaReteOneri + data.quotaFissa + data.quotaPotenza;
+                    if (data.oneriGenerali > 0) {
+                        data.speseAltre += data.oneriGenerali;
+                    }
+
+                    // Somme importi = materia energia + spese altre + accise
+                    data.sommeImporti = data.materiaEnergia + data.speseAltre + (data.accise || 0);
+
+                    // Costo/kWh pulito = (Totale bolletta - Canone - IVA) / kWh
+                    if (data.consumoTotalePeriodo > 0) {
+                        const costoNetto = data.totaleNettoBolletta - data.canoneTV - data.iva;
+                        data.costoKwh = costoNetto / data.consumoTotalePeriodo;
+                        
+                        // Costo SOLO materia energia per kWh
+                        data.costoMateriaKwh = data.materiaEnergia / data.consumoTotalePeriodo;
+                    }
+
+                    // Costo corrente tot/giorno
+                    if (data.dataInizio && data.dataFine) {
+                        const dateInizio = new Date(data.dataInizio.split('/').reverse().join('-'));
+                        const dateFine = new Date(data.dataFine.split('/').reverse().join('-'));
+                        const giorni = Math.ceil((dateFine - dateInizio) / (1000 * 60 * 60 * 24)) + 1;
+                        if (giorni > 0) {
+                            data.costoCorrenteTotGiorno = data.totaleDaPagare / giorni;
+                        }
+                    }
+
+                    // Sconti (se quota fissa è negativa, potrebbe indicare sconti)
+                    if (data.quotaFissa < 0) {
+                        data.sconti = Math.abs(data.quotaFissa);
+                    }
+
+                } catch (err) {
+                    console.error('Error parsing bill data:', err);
+                    throw new Error('Errore nell\'estrazione dei dati dal PDF');
+                }
+
+                return data;
+            };
+
+            const handleFileUpload = async (event) => {
+                const files = event.target.files;
+                if (!files || files.length === 0) {
+                    setError('Per favore carica almeno un file PDF');
+                    return;
+                }
+
+                if (!pdfJsLoaded) {
+                    setError('Libreria PDF non ancora caricata. Attendi qualche secondo e riprova.');
+                    return;
+                }
+
+                setLoading(true);
+                setError(null);
+                
+                const processedBills = [];
+                let successCount = 0;
+                let errorCount = 0;
+
+                // Process all files
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    
+                    if (file.type !== 'application/pdf') {
+                        console.warn(`File ${file.name} ignorato: non è un PDF`);
+                        errorCount++;
+                        continue;
+                    }
+
+                    try {
+                        // Read PDF file as ArrayBuffer
+                        const arrayBuffer = await file.arrayBuffer();
+                        
+                        // Load PDF with PDF.js
+                        const loadingTask = window.pdfjsLib.getDocument({ data: arrayBuffer });
+                        const pdf = await loadingTask.promise;
+                        
+                        // Extract text from all pages
+                        let fullText = '';
+                        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                            const page = await pdf.getPage(pageNum);
+                            const textContent = await page.getTextContent();
+                            const pageText = textContent.items.map(item => item.str).join(' ');
+                            fullText += pageText + '\n';
+                        }
+                        
+                        console.log(`Extracted text from ${file.name}`);
+                        
+                        // Parse the extracted text
+                        const billData = parseBillData(fullText);
+                        processedBills.push({ ...billData, id: Date.now() + i, fileName: file.name });
+                        successCount++;
+                        
+                    } catch (err) {
+                        console.error(`Error processing ${file.name}:`, err);
+                        errorCount++;
+                    }
+                }
+
+                setLoading(false);
+
+                if (processedBills.length > 0) {
+                    // Add all processed bills to database
+                    setAllBills([...allBills, ...processedBills]);
+                    setPdfFile(null);
+                    
+                    // Show success message
+                    alert(`✅ Elaborate ${successCount} bollette con successo!${errorCount > 0 ? `\n⚠️ ${errorCount} file non processati` : ''}`);
+                    
+                    // Reset file input
+                    event.target.value = '';
+                } else {
+                    setError(`Nessuna bolletta processata. ${errorCount} errori.`);
+                }
+            };
+
+            const addToDatabase = () => {
+                if (extractedData) {
+                    setAllBills([...allBills, { ...extractedData, id: Date.now() }]);
+                    setExtractedData(null);
+                    setPdfFile(null);
+                    // Reset file input
+                    const fileInput = document.querySelector('input[type="file"]');
+                    if (fileInput) fileInput.value = '';
+                }
+            };
+
+            const exportToCSV = () => {
+                if (allBills.length === 0) {
+                    alert('Nessuna bolletta da esportare');
+                    return;
+                }
+
+                const headers = [
+                    'gestore',
+                    'potenza',
+                    'fattura',
+                    'periodo',
+                    'da data',
+                    'a data',
+                    'kWh - f1',
+                    'kWh - f2',
+                    'kWh - f3',
+                    'costo tot in bolletta',
+                    'materia energia',
+                    'canone rai',
+                    'spese (altre)',
+                    'iva',
+                    'sconti',
+                    'somme_importi',
+                    'TOT kWh',
+                    'costo_materia/kWh',
+                    'costo_totale/kWh',
+                    'costo',
+                    'corrente_tot/giorno'
+                ];
+
+                // Helper function to format numbers for Italian CSV (comma as decimal separator)
+                const formatNumber = (num, decimals = 2) => {
+                    return num.toFixed(decimals).replace('.', ',');
+                };
+
+                const rows = allBills.map(bill => [
+                    bill.fornitore,
+                    formatNumber(bill.potenzaImpegnata, 2),
+                    bill.numeroFattura,
+                    bill.periodoCompetenza,
+                    bill.dataInizio,
+                    bill.dataFine,
+                    bill.consumoF1Periodo,
+                    bill.consumoF2Periodo,
+                    bill.consumoF3Periodo,
+                    formatNumber(bill.totaleDaPagare, 2),
+                    formatNumber(bill.materiaEnergia, 2),
+                    formatNumber(bill.canoneTV, 2),
+                    formatNumber(bill.speseAltre, 2),
+                    formatNumber(bill.iva, 2),
+                    formatNumber(bill.sconti, 2),
+                    formatNumber(bill.sommeImporti, 2),
+                    bill.consumoTotalePeriodo,
+                    formatNumber(bill.costoMateriaKwh, 6),
+                    formatNumber(bill.costoKwh, 6),
+                    formatNumber(bill.totaleNettoBolletta, 2),
+                    formatNumber(bill.costoCorrenteTotGiorno, 2)
+                ]);
+
+                const csvContent = [
+                    headers.join(';'), // Use semicolon for Italian CSV
+                    ...rows.map(row => row.map(cell => `"${cell}"`).join(';'))
+                ].join('\n');
+
+                const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `bollette_energia_${new Date().toISOString().split('T')[0]}.csv`;
+                link.click();
+            };
+
+            const exportToExcel = () => {
+                if (allBills.length === 0) {
+                    alert('Nessuna bolletta da esportare');
+                    return;
+                }
+
+                // Prepare headers
+                const headers = [
+                    'Gestore',
+                    'Potenza (kW)',
+                    'N. Fattura',
+                    'Periodo',
+                    'Data Inizio',
+                    'Data Fine',
+                    'kWh F1',
+                    'kWh F2',
+                    'kWh F3',
+                    'Totale Bolletta',
+                    'Materia Energia',
+                    'Canone RAI',
+                    'Spese Altre',
+                    'IVA',
+                    'Sconti',
+                    'Somme Importi',
+                    'TOT kWh',
+                    'Costo Materia/kWh',
+                    'Costo Totale/kWh',
+                    'Costo Netto',
+                    'Costo/Giorno'
+                ];
+
+                // Prepare data rows
+                const data = allBills.map(bill => [
+                    bill.fornitore,
+                    bill.potenzaImpegnata,
+                    bill.numeroFattura,
+                    bill.periodoCompetenza,
+                    bill.dataInizio,
+                    bill.dataFine,
+                    bill.consumoF1Periodo,
+                    bill.consumoF2Periodo,
+                    bill.consumoF3Periodo,
+                    bill.totaleDaPagare,
+                    bill.materiaEnergia,
+                    bill.canoneTV,
+                    bill.speseAltre,
+                    bill.iva,
+                    bill.sconti,
+                    bill.sommeImporti,
+                    bill.consumoTotalePeriodo,
+                    bill.costoMateriaKwh,
+                    bill.costoKwh,
+                    bill.totaleNettoBolletta,
+                    bill.costoCorrenteTotGiorno
+                ]);
+
+                // Create worksheet
+                const ws_data = [headers, ...data];
+                const ws = XLSX.utils.aoa_to_sheet(ws_data);
+
+                // Set column widths
+                const colWidths = [
+                    { wch: 12 },  // Gestore
+                    { wch: 10 },  // Potenza
+                    { wch: 16 },  // Fattura
+                    { wch: 24 },  // Periodo
+                    { wch: 12 },  // Data Inizio
+                    { wch: 12 },  // Data Fine
+                    { wch: 10 },  // kWh F1
+                    { wch: 10 },  // kWh F2
+                    { wch: 10 },  // kWh F3
+                    { wch: 14 },  // Totale Bolletta
+                    { wch: 14 },  // Materia Energia
+                    { wch: 12 },  // Canone RAI
+                    { wch: 12 },  // Spese Altre
+                    { wch: 10 },  // IVA
+                    { wch: 10 },  // Sconti
+                    { wch: 14 },  // Somme Importi
+                    { wch: 10 },  // TOT kWh
+                    { wch: 16 },  // Costo Materia/kWh
+                    { wch: 16 },  // Costo Totale/kWh
+                    { wch: 12 },  // Costo Netto
+                    { wch: 12 }   // Costo/Giorno
+                ];
+                ws['!cols'] = colWidths;
+
+                // Apply formatting to cells
+                const range = XLSX.utils.decode_range(ws['!ref']);
+                
+                for (let R = range.s.r; R <= range.e.r; ++R) {
+                    for (let C = range.s.c; C <= range.e.c; ++C) {
+                        const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+                        if (!ws[cellAddress]) continue;
+
+                        // Header row - bold and centered
+                        if (R === 0) {
+                            ws[cellAddress].s = {
+                                font: { bold: true, color: { rgb: "FFFFFF" } },
+                                fill: { fgColor: { rgb: "4472C4" } },
+                                alignment: { horizontal: "center", vertical: "center" }
+                            };
+                        } else {
+                            // Data rows
+                            const alignment = { vertical: "center" };
+                            
+                            // Center alignment for specific columns
+                            if (C === 1 || C === 4 || C === 5 || C === 6 || C === 7 || C === 8 || C === 16) {
+                                alignment.horizontal = "center";
+                            }
+                            // Right alignment for currency and numbers
+                            else if (C >= 9) {
+                                alignment.horizontal = "right";
+                            }
+
+                            ws[cellAddress].s = { alignment };
+
+                            // Apply number formats
+                            // Currency columns (€)
+                            if (C === 9 || C === 10 || C === 11 || C === 12 || C === 13 || C === 14 || C === 15 || C === 19 || C === 20) {
+                                ws[cellAddress].z = '€#,##0.00';
+                                ws[cellAddress].t = 'n';
+                            }
+                            // Costo Materia/kWh and Costo Totale/kWh - 6 decimals
+                            else if (C === 17 || C === 18) {
+                                ws[cellAddress].z = '€0.000000';
+                                ws[cellAddress].t = 'n';
+                            }
+                            // Integer columns (kWh)
+                            else if (C === 6 || C === 7 || C === 8 || C === 16) {
+                                ws[cellAddress].z = '#,##0';
+                                ws[cellAddress].t = 'n';
+                            }
+                            // Potenza - 2 decimals
+                            else if (C === 1) {
+                                ws[cellAddress].z = '#,##0.00';
+                                ws[cellAddress].t = 'n';
+                            }
+                        }
+                    }
+                }
+
+                // Create workbook
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Bollette");
+
+                // Export
+                XLSX.writeFile(wb, `bollette_energia_${new Date().toISOString().split('T')[0]}.xlsx`);
+            };
+
+            const copyToClipboard = async () => {
+                if (allBills.length === 0) {
+                    alert('Nessuna bolletta da copiare');
+                    return;
+                }
+
+                // NO headers - only data rows
+
+                // Helper function to format numbers for Google Sheets (comma as decimal separator)
+                const formatNumber = (num, decimals = 2) => {
+                    return num.toFixed(decimals).replace('.', ',');
+                };
+
+                const rows = allBills.map(bill => [
+                    bill.fornitore,
+                    formatNumber(bill.potenzaImpegnata, 2),
+                    bill.numeroFattura,
+                    bill.periodoCompetenza,
+                    bill.dataInizio,
+                    bill.dataFine,
+                    bill.consumoF1Periodo,
+                    bill.consumoF2Periodo,
+                    bill.consumoF3Periodo,
+                    formatNumber(bill.totaleDaPagare, 2),
+                    formatNumber(bill.materiaEnergia, 2),
+                    formatNumber(bill.canoneTV, 2),
+                    formatNumber(bill.speseAltre, 2),
+                    formatNumber(bill.iva, 2),
+                    formatNumber(bill.sconti, 2),
+                    formatNumber(bill.sommeImporti, 2),
+                    bill.consumoTotalePeriodo,
+                    formatNumber(bill.costoMateriaKwh, 6),
+                    formatNumber(bill.costoKwh, 6),
+                    formatNumber(bill.totaleNettoBolletta, 2),
+                    formatNumber(bill.costoCorrenteTotGiorno, 2)
+                ]);
+
+                // Create TSV format (TAB separated with comma decimals for Google Sheets)
+                // NO HEADERS - just data
+                const tsvContent = rows.map(row => row.join('\t')).join('\n');
+
+                try {
+                    await navigator.clipboard.writeText(tsvContent);
+                    
+                    // Show success message
+                    const btn = document.querySelector('[data-copy-btn]');
+                    const originalText = btn.innerHTML;
+                    btn.innerHTML = '<i data-lucide="check"></i> Copiato!';
+                    btn.style.background = 'linear-gradient(135deg, #10b981, #059669)';
+                    
+                    // Re-initialize icons
+                    setTimeout(() => {
+                        lucide.createIcons();
+                    }, 10);
+                    
+                    setTimeout(() => {
+                        btn.innerHTML = originalText;
+                        btn.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
+                        lucide.createIcons();
+                    }, 2000);
+                    
+                } catch (err) {
+                    alert('Errore nella copia. Usa i pulsanti Esporta invece.');
+                    console.error('Copy failed:', err);
+                }
+            };
+
+            const deleteBill = (id) => {
+                if (confirm('Sei sicuro di voler eliminare questa bolletta?')) {
+                    setAllBills(allBills.filter(bill => bill.id !== id));
+                }
+            };
+
+            return (
+                <div style={{
+                    minHeight: '100vh',
+                    background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%)',
+                    padding: '2rem',
+                    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+                }}>
+                    {/* Header */}
+                    <div style={{
+                        maxWidth: '1400px',
+                        margin: '0 auto',
+                        marginBottom: '3rem'
+                    }}>
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '1rem',
+                            marginBottom: '0.5rem'
+                        }}>
+                            <div style={{
+                                background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+                                padding: '0.75rem',
+                                borderRadius: '12px',
+                                display: 'flex'
+                            }}>
+                                <Zap />
+                            </div>
+                            <h1 style={{
+                                fontSize: '2.5rem',
+                                fontWeight: '800',
+                                background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+                                WebkitBackgroundClip: 'text',
+                                WebkitTextFillColor: 'transparent',
+                                margin: 0
+                            }}>
+                                Bollette Parser
+                            </h1>
+                        </div>
+                        <p style={{
+                            color: '#94a3b8',
+                            fontSize: '1.1rem',
+                            margin: 0,
+                            paddingLeft: '4rem'
+                        }}>
+                            Analizza automaticamente le tue bollette dell'energia elettrica
+                        </p>
+                    </div>
+
+                    <div style={{
+                        maxWidth: '1400px',
+                        margin: '0 auto',
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))',
+                        gap: '2rem'
+                    }}>
+                        {/* Upload Section */}
+                        <div style={{
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            backdropFilter: 'blur(10px)',
+                            borderRadius: '16px',
+                            padding: '2rem',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
+                        }}>
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.75rem',
+                                marginBottom: '1.5rem'
+                            }}>
+                                <Upload />
+                                <h2 style={{
+                                    color: 'white',
+                                    fontSize: '1.5rem',
+                                    fontWeight: '700',
+                                    margin: 0
+                                }}>
+                                    Carica Bolletta
+                                </h2>
+                            </div>
+
+                            <label style={{
+                                display: 'block',
+                                padding: '3rem 2rem',
+                                border: '2px dashed rgba(59, 130, 246, 0.5)',
+                                borderRadius: '12px',
+                                textAlign: 'center',
+                                cursor: 'pointer',
+                                transition: 'all 0.3s ease',
+                                background: 'rgba(59, 130, 246, 0.05)'
+                            }}>
+                                <input
+                                    type="file"
+                                    accept=".pdf"
+                                    multiple
+                                    onChange={handleFileUpload}
+                                    style={{ display: 'none' }}
+                                />
+                                <FileText />
+                                <div style={{ color: 'white', fontSize: '1.1rem', fontWeight: '600', marginBottom: '0.5rem', marginTop: '1rem' }}>
+                                    Clicca per selezionare PDF (uno o più file)
+                                </div>
+                                <div style={{ color: '#94a3b8', fontSize: '0.9rem' }}>
+                                    ✨ Puoi selezionare più bollette contemporaneamente!
+                                </div>
+                            </label>
+
+                            {loading && (
+                                <div style={{
+                                    marginTop: '1rem',
+                                    padding: '1rem',
+                                    background: 'rgba(59, 130, 246, 0.1)',
+                                    borderRadius: '8px',
+                                    color: '#3b82f6',
+                                    textAlign: 'center',
+                                    fontSize: '0.95rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    gap: '0.5rem'
+                                }}>
+                                    <Activity />
+                                    Elaborazione in corso...
+                                </div>
+                            )}
+
+                            {!pdfJsLoaded && (
+                                <div style={{
+                                    marginTop: '1rem',
+                                    padding: '1rem',
+                                    background: 'rgba(251, 191, 36, 0.1)',
+                                    border: '1px solid rgba(251, 191, 36, 0.3)',
+                                    borderRadius: '8px',
+                                    color: '#fbbf24',
+                                    fontSize: '0.9rem',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.5rem'
+                                }}>
+                                    <AlertCircle />
+                                    Caricamento libreria PDF in corso...
+                                </div>
+                            )}
+
+                            {error && (
+                                <div style={{
+                                    marginTop: '1rem',
+                                    padding: '1rem',
+                                    background: 'rgba(239, 68, 68, 0.1)',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    borderRadius: '8px',
+                                    color: '#ef4444',
+                                    fontSize: '0.9rem'
+                                }}>
+                                    {error}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Extracted Data Preview */}
+                        {extractedData && (
+                            <div style={{
+                                background: 'rgba(255, 255, 255, 0.05)',
+                                backdropFilter: 'blur(10px)',
+                                borderRadius: '16px',
+                                padding: '2rem',
+                                border: '1px solid rgba(255, 255, 255, 0.1)',
+                                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
+                            }}>
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '0.75rem',
+                                    marginBottom: '1.5rem'
+                                }}>
+                                    <FileText />
+                                    <h2 style={{
+                                        color: 'white',
+                                        fontSize: '1.5rem',
+                                        fontWeight: '700',
+                                        margin: 0
+                                    }}>
+                                        Dati Estratti
+                                    </h2>
+                                </div>
+
+                                <div style={{
+                                    display: 'grid',
+                                    gap: '1rem',
+                                    marginBottom: '1.5rem'
+                                }}>
+                                    <DataField icon={<FileText />} label="N. Fattura" value={extractedData.numeroFattura || 'N/A'} />
+                                    <DataField icon={<Calendar />} label="Periodo" value={extractedData.periodoCompetenza || 'N/A'} />
+                                    <DataField icon={<Zap />} label="Consumo Totale" value={`${extractedData.consumoTotalePeriodo} kWh`} />
+                                    <DataField icon={<TrendingUp />} label="F1 / F2 / F3" value={`${extractedData.consumoF1Periodo} / ${extractedData.consumoF2Periodo} / ${extractedData.consumoF3Periodo} kWh`} />
+                                    <DataField icon={<Zap />} label="Potenza Impegnata" value={`${extractedData.potenzaImpegnata} kW`} />
+                                    
+                                    <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '1rem', marginTop: '0.5rem' }}>
+                                        <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem', fontWeight: '600' }}>💰 Dettaglio Costi</div>
+                                    </div>
+                                    
+                                    <DataField icon={<DollarSign />} label="Materia Energia" value={`€${extractedData.materiaEnergia.toFixed(2)}`} />
+                                    <DataField icon={<DollarSign />} label="Spese Altre" value={`€${extractedData.speseAltre.toFixed(2)}`} />
+                                    {extractedData.canoneTV > 0 && (
+                                        <DataField icon={<DollarSign />} label="Canone RAI" value={`€${extractedData.canoneTV.toFixed(2)}`} />
+                                    )}
+                                    <DataField icon={<DollarSign />} label="IVA" value={`€${extractedData.iva.toFixed(2)}`} />
+                                    {extractedData.sconti > 0 && (
+                                        <DataField icon={<DollarSign />} label="Sconti" value={`€${extractedData.sconti.toFixed(2)}`} />
+                                    )}
+                                    
+                                    <div style={{ borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '1rem', marginTop: '0.5rem' }}>
+                                        <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem', fontWeight: '600' }}>📊 Analisi</div>
+                                    </div>
+                                    
+                                    <DataField icon={<TrendingUp />} label="Costo Materia/kWh" value={`€${extractedData.costoMateriaKwh.toFixed(6)}/kWh`} highlight={true} />
+                                    <DataField icon={<TrendingUp />} label="Costo Totale/kWh" value={`€${extractedData.costoKwh.toFixed(6)}/kWh`} />
+                                    <DataField icon={<DollarSign />} label="Costo/Giorno" value={`€${extractedData.costoCorrenteTotGiorno.toFixed(2)}/giorno`} />
+                                    <DataField icon={<DollarSign />} label="Totale da Pagare" value={`€${extractedData.totaleDaPagare.toFixed(2)}`} highlight={true} />
+                                </div>
+
+                                <button
+                                    onClick={addToDatabase}
+                                    style={{
+                                        width: '100%',
+                                        padding: '1rem',
+                                        background: 'linear-gradient(135deg, #10b981, #059669)',
+                                        color: 'white',
+                                        border: 'none',
+                                        borderRadius: '8px',
+                                        fontSize: '1rem',
+                                        fontWeight: '600',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '0.5rem',
+                                        boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
+                                    }}
+                                >
+                                    <Database />
+                                    Aggiungi al Database
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Bills Database */}
+                    {allBills.length > 0 && (
+                        <>
+                        <div style={{
+                            maxWidth: '1400px',
+                            margin: '3rem auto 0',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            backdropFilter: 'blur(10px)',
+                            borderRadius: '16px',
+                            padding: '2rem',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
+                        }}>
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                marginBottom: '2rem',
+                                flexWrap: 'wrap',
+                                gap: '1rem'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <FileText />
+                                    <h2 style={{
+                                        color: 'white',
+                                        fontSize: '1.5rem',
+                                        fontWeight: '700',
+                                        margin: 0
+                                    }}>
+                                        Anteprima Dati CSV ({allBills.length} bollette)
+                                    </h2>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                                    <button
+                                        onClick={copyToClipboard}
+                                        data-copy-btn
+                                        style={{
+                                            padding: '0.75rem 1.5rem',
+                                            background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '8px',
+                                            fontSize: '0.95rem',
+                                            fontWeight: '600',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem',
+                                            boxShadow: '0 4px 12px rgba(245, 158, 11, 0.3)'
+                                        }}
+                                    >
+                                        <i data-lucide="clipboard"></i>
+                                        Copia per Google Sheets
+                                    </button>
+                                    
+                                    <button
+                                        onClick={exportToExcel}
+                                        style={{
+                                            padding: '0.75rem 1.5rem',
+                                            background: 'linear-gradient(135deg, #10b981, #059669)',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '8px',
+                                            fontSize: '0.95rem',
+                                            fontWeight: '600',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem',
+                                            boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)'
+                                        }}
+                                    >
+                                        <Download />
+                                        Esporta Excel
+                                    </button>
+                                    
+                                    <button
+                                        onClick={exportToCSV}
+                                        style={{
+                                            padding: '0.75rem 1.5rem',
+                                            background: 'linear-gradient(135deg, #8b5cf6, #7c3aed)',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '8px',
+                                            fontSize: '0.95rem',
+                                            fontWeight: '600',
+                                            cursor: 'pointer',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem',
+                                            boxShadow: '0 4px 12px rgba(139, 92, 246, 0.3)'
+                                        }}
+                                    >
+                                        <Download />
+                                        Esporta CSV
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div style={{ 
+                                overflowX: 'auto',
+                                marginBottom: '2rem',
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                borderRadius: '8px'
+                            }}>
+                                <table style={{
+                                    width: '100%',
+                                    borderCollapse: 'collapse',
+                                    fontSize: '0.85rem'
+                                }}>
+                                    <thead>
+                                        <tr style={{ 
+                                            background: 'rgba(59, 130, 246, 0.2)',
+                                            color: '#fff',
+                                            fontSize: '0.75rem',
+                                            textTransform: 'uppercase',
+                                            letterSpacing: '0.05em'
+                                        }}>
+                                            <th style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Gestore</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Potenza</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Fattura</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Periodo</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Da Data</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>A Data</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>kWh F1</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>kWh F2</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>kWh F3</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Costo Tot</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Materia En.</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Canone RAI</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Spese Altre</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>IVA</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Sconti</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Somme Imp.</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>TOT kWh</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>€/kWh Mat.</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>€/kWh Tot.</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Costo Netto</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>€/Giorno</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {allBills.map((bill, idx) => (
+                                            <tr key={bill.id} style={{
+                                                background: idx % 2 === 0 ? 'rgba(255, 255, 255, 0.03)' : 'rgba(255, 255, 255, 0.01)',
+                                                color: 'white'
+                                            }}>
+                                                <td style={{ padding: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.fornitore}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.potenzaImpegnata}</td>
+                                                <td style={{ padding: '0.75rem', fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.numeroFattura}</td>
+                                                <td style={{ padding: '0.75rem', fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.periodoCompetenza}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'center', fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.dataInizio}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'center', fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.dataFine}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.consumoF1Periodo}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.consumoF2Periodo}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.consumoF3Periodo}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', color: '#10b981', fontWeight: '600', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.totaleDaPagare.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.materiaEnergia.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.canoneTV.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.speseAltre.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.iva.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', color: bill.sconti > 0 ? '#22c55e' : 'inherit', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.sconti.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.sommeImporti.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', fontWeight: '600', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.consumoTotalePeriodo}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', color: '#10b981', fontWeight: '600', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.costoMateriaKwh.toFixed(6)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', color: '#3b82f6', fontWeight: '600', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.costoKwh.toFixed(6)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.totaleNettoBolletta.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.costoCorrenteTotGiorno.toFixed(2)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                padding: '1rem',
+                                background: 'rgba(59, 130, 246, 0.1)',
+                                borderRadius: '8px',
+                                fontSize: '0.9rem',
+                                color: '#94a3b8',
+                                flexWrap: 'wrap',
+                                gap: '1rem'
+                            }}>
+                                <div>
+                                    ℹ️ <strong style={{color: '#f59e0b'}}>Copia</strong> direttamente in Google Sheets, oppure scarica in <strong style={{color: '#10b981'}}>Excel</strong> o <strong style={{color: '#8b5cf6'}}>CSV</strong>
+                                </div>
+                                <div style={{ color: '#3b82f6', fontWeight: '600' }}>
+                                    {allBills.length} bolletta{allBills.length !== 1 ? 'e' : ''} pronta{allBills.length !== 1 ? 'e' : ''} per l'export
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style={{
+                            maxWidth: '1400px',
+                            margin: '3rem auto 0',
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            backdropFilter: 'blur(10px)',
+                            borderRadius: '16px',
+                            padding: '2rem',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)'
+                        }}>
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                marginBottom: '2rem',
+                                flexWrap: 'wrap',
+                                gap: '1rem'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                    <Database />
+                                    <h2 style={{
+                                        color: 'white',
+                                        fontSize: '1.5rem',
+                                        fontWeight: '700',
+                                        margin: 0
+                                    }}>
+                                        Riepilogo Generale
+                                    </h2>
+                                </div>
+                            </div>
+
+                            {/* Summary Statistics */}
+                            <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                                gap: '1rem'
+                            }}>
+                                <StatCard
+                                    label="Consumo Totale"
+                                    value={`${allBills.reduce((sum, bill) => sum + bill.consumoTotalePeriodo, 0).toFixed(0)} kWh`}
+                                    color="#3b82f6"
+                                />
+                                <StatCard
+                                    label="Spesa Totale"
+                                    value={`€${allBills.reduce((sum, bill) => sum + bill.totaleDaPagare, 0).toFixed(2)}`}
+                                    color="#10b981"
+                                />
+                                <StatCard
+                                    label="€/kWh Materia (medio)"
+                                    value={`€${(allBills.reduce((sum, bill) => sum + bill.costoMateriaKwh, 0) / allBills.length).toFixed(6)}/kWh`}
+                                    color="#10b981"
+                                />
+                                <StatCard
+                                    label="€/kWh Totale (medio)"
+                                    value={`€${(allBills.reduce((sum, bill) => sum + bill.costoKwh, 0) / allBills.length).toFixed(6)}/kWh`}
+                                    color="#8b5cf6"
+                                />
+                                <StatCard
+                                    label="Materia Energia Tot."
+                                    value={`€${allBills.reduce((sum, bill) => sum + bill.materiaEnergia, 0).toFixed(2)}`}
+                                    color="#f59e0b"
+                                />
+                                <StatCard
+                                    label="Canone TV Totale"
+                                    value={`€${allBills.reduce((sum, bill) => sum + bill.canoneTV, 0).toFixed(2)}`}
+                                    color="#ef4444"
+                                />
+                                <StatCard
+                                    label="IVA Totale"
+                                    value={`€${allBills.reduce((sum, bill) => sum + bill.iva, 0).toFixed(2)}`}
+                                    color="#06b6d4"
+                                />
+                            </div>
+                        </div>
+                        </>
+                    )}
+
+                    {/* Instructions */}
+                    <div style={{
+                        maxWidth: '1400px',
+                        margin: '3rem auto 0',
+                        background: 'rgba(59, 130, 246, 0.05)',
+                        border: '1px solid rgba(59, 130, 246, 0.2)',
+                        borderRadius: '12px',
+                        padding: '1.5rem',
+                        color: '#94a3b8',
+                        fontSize: '0.95rem',
+                        lineHeight: '1.6'
+                    }}>
+                        <h3 style={{ color: '#3b82f6', marginTop: 0, marginBottom: '1rem', fontSize: '1.1rem' }}>
+                            📝 Come usare questa applicazione
+                        </h3>
+                        <ol style={{ marginBottom: '1rem', paddingLeft: '1.5rem' }}>
+                            <li style={{ marginBottom: '0.5rem' }}>Carica uno o più PDF delle bollette (puoi selezionare più file insieme!)</li>
+                            <li style={{ marginBottom: '0.5rem' }}>L'app processa automaticamente tutte le bollette</li>
+                            <li style={{ marginBottom: '0.5rem' }}>I dati vengono aggiunti al database automaticamente</li>
+                            <li style={{ marginBottom: '0.5rem' }}>Ripeti se hai altre bollette da aggiungere</li>
+                        </ol>
+                        <h4 style={{ color: '#3b82f6', marginTop: '1rem', marginBottom: '0.75rem', fontSize: '1rem' }}>
+                            💾 Esporta i dati:
+                        </h4>
+                        <ul style={{ marginBottom: 0, paddingLeft: '1.5rem' }}>
+                            <li style={{ marginBottom: '0.5rem' }}><strong style={{color: '#f59e0b'}}>Copia per Google Sheets</strong> → Clicca e poi CTRL+V (Cmd+V) in Google Sheets - formato italiano con virgole!</li>
+                            <li style={{ marginBottom: '0.5rem' }}><strong style={{color: '#10b981'}}>Esporta Excel</strong> → File .xlsx formattato professionalmente</li>
+                            <li><strong style={{color: '#8b5cf6'}}>Esporta CSV</strong> → File .csv da importare in Google Sheets (File → Importa)</li>
+                        </ul>
+                    </div>
+                </div>
+            );
+        }
+
+        function DataField({ icon, label, value, highlight }) {
+            return (
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '0.75rem',
+                    background: highlight ? 'rgba(16, 185, 129, 0.1)' : 'rgba(255, 255, 255, 0.03)',
+                    borderRadius: '8px',
+                    border: highlight ? '1px solid rgba(16, 185, 129, 0.3)' : 'none'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#94a3b8', fontSize: '0.9rem' }}>
+                        {icon}
+                        <span>{label}</span>
+                    </div>
+                    <div style={{
+                        color: highlight ? '#10b981' : 'white',
+                        fontWeight: highlight ? '700' : '600',
+                        fontSize: highlight ? '1.1rem' : '0.95rem'
+                    }}>
+                        {value}
+                    </div>
+                </div>
+            );
+        }
+
+        function StatCard({ label, value, color }) {
+            return (
+                <div style={{
+                    padding: '1.5rem',
+                    background: `linear-gradient(135deg, ${color}15, ${color}05)`,
+                    border: `1px solid ${color}30`,
+                    borderRadius: '12px',
+                    textAlign: 'center'
+                }}>
+                    <div style={{ color: '#94a3b8', fontSize: '0.85rem', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {label}
+                    </div>
+                    <div style={{ color: color, fontSize: '1.5rem', fontWeight: '700' }}>
+                        {value}
+                    </div>
+                </div>
+            );
+        }
+
+        // Render the app
+        ReactDOM.render(<BolletteParser />, document.getElementById('root'));
+    </script>
+</body>
+</html>
