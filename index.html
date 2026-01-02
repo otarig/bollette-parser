@@ -78,6 +78,50 @@
                 }
             }, []);
 
+            // Drag and drop handlers
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDragging(true);
+            };
+
+            const handleDragLeave = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDragging(false);
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDragging(false);
+                
+                const files = e.dataTransfer.files;
+                if (files && files.length > 0) {
+                    const fakeEvent = { target: { files: files, value: '' } };
+                    handleFileUpload(fakeEvent);
+                }
+            };
+
+            // Sort bills by date
+            const toggleSort = () => {
+                const newOrder = sortOrder === 'desc' ? 'asc' : 'desc';
+                setSortOrder(newOrder);
+                
+                const sorted = [...allBills].sort((a, b) => {
+                    const dateA = new Date(a.dataInizio.split('/').reverse().join('-'));
+                    const dateB = new Date(b.dataInizio.split('/').reverse().join('-'));
+                    return newOrder === 'asc' ? dateA - dateB : dateB - dateA;
+                });
+                
+                setAllBills(sorted); // Force re-render with sorted array
+                
+                // Re-initialize icons after render
+                setTimeout(() => {
+                    lucide.createIcons();
+                }, 100);
+            };
+
             // Parse PDF text to extract bill data
             const parseBillData = (text) => {
                 const data = {
@@ -145,32 +189,52 @@
                 };
 
                 try {
-                    // Extract Numero Fattura - more precise pattern
-                    const fatturaMatch = text.match(/N\.\s*Fattura\s+elettronica\s+valida\s+ai\s+fini\s+fiscali\s+(\d{12})/i);
+                    // Extract Numero Fattura - multiple patterns
+                    let fatturaMatch = text.match(/N\.\s*Fattura\s+elettronica\s+valida\s+ai\s+fini\s+fiscali\s+(\d{12})/i);
+                    if (!fatturaMatch) {
+                        // Try sintesi format: "Fattura N. 412500164507"
+                        fatturaMatch = text.match(/Fattura\s+N\.\s+(\d{12})/i);
+                    }
                     if (fatturaMatch) data.numeroFattura = fatturaMatch[1];
 
-                    // Extract Periodo di competenza - more precise
-                    const periodoMatch = text.match(/Periodo\s+di\s+competenza\s+(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/i);
+                    // Extract Periodo di competenza - multiple patterns
+                    let periodoMatch = text.match(/Periodo\s+di\s+competenza\s+(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/i);
+                    if (!periodoMatch) {
+                        // Try sintesi format: "Periodo di riferimento: 01/11/2024 - 31/12/2024"
+                        periodoMatch = text.match(/Periodo\s+di\s+riferimento:\s+(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/i);
+                    }
                     if (periodoMatch) {
                         data.periodoCompetenza = `${periodoMatch[1]} - ${periodoMatch[2]}`;
                         data.dataInizio = periodoMatch[1];
                         data.dataFine = periodoMatch[2];
                     }
 
-                    // Extract Totale da pagare
-                    const totaleDaPagareMatch = text.match(/TOTALE\s+DA\s+PAGARE\s+([\d,]+)\s*€/i);
+                    // Extract Totale da pagare - multiple patterns
+                    let totaleDaPagareMatch = text.match(/TOTALE\s+DA\s+PAGARE\s+([\d,]+)\s*€/i);
+                    if (!totaleDaPagareMatch) {
+                        // Try sintesi format: "TOTALE DA PAGARE EURO 110,26"
+                        totaleDaPagareMatch = text.match(/TOTALE\s+DA\s+PAGARE\s+EURO\s+([\d,]+)/i);
+                    }
                     if (totaleDaPagareMatch) {
                         data.totaleDaPagare = parseFloat(totaleDaPagareMatch[1].replace(',', '.'));
                     }
 
-                    // Extract Canone TV
-                    const canoneMatch = text.match(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?(\d+,\d+)\s*€/i);
+                    // Extract Canone TV - multiple patterns
+                    let canoneMatch = text.match(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?([\d,]+)\s*€/i);
+                    if (!canoneMatch) {
+                        // Try with "€ 9,00" format (sintesi)
+                        canoneMatch = text.match(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?€\s+([\d,]+)/i);
+                    }
                     if (canoneMatch) {
                         data.canoneTV = parseFloat(canoneMatch[1].replace(',', '.'));
                     }
 
-                    // Extract Totale bolletta (senza canone)
-                    const totaleBollettaMatch = text.match(/Totale\s+bolletta\s+([\d,]+)\s*€/i);
+                    // Extract Totale bolletta (senza canone) - multiple patterns
+                    let totaleBollettaMatch = text.match(/Totale\s+bolletta\s+([\d,]+)\s*€/i);
+                    if (!totaleBollettaMatch) {
+                        // Try sintesi format: "TOTALE € 101,26" from RIEPILOGO FATTURA
+                        totaleBollettaMatch = text.match(/TOTALE\s+€\s+([\d,]+)/i);
+                    }
                     if (totaleBollettaMatch) {
                         data.totaleNettoBolletta = parseFloat(totaleBollettaMatch[1].replace(',', '.'));
                     }
@@ -193,11 +257,21 @@
                     }
 
                     // Extract F1, F2, F3 del periodo dalla tabella CONSUMI
-                    const periodoConsumiMatch = text.match(/Periodo\s+Tipo\s+F1\s+F2\s+F3\s+Consumi\s+Fatturati.*?Effettivo\s+(\d+)\s+(\d+)\s+(\d+).*?Effettivo\s+(\d+)\s+(\d+)\s+(\d+)/s);
+                    let periodoConsumiMatch = text.match(/Periodo\s+Tipo\s+F1\s+F2\s+F3\s+Consumi\s+Fatturati.*?Effettivo\s+(\d+)\s+(\d+)\s+(\d+).*?Effettivo\s+(\d+)\s+(\d+)\s+(\d+)/s);
                     if (periodoConsumiMatch) {
                         data.consumoF1Periodo = parseInt(periodoConsumiMatch[1]) + parseInt(periodoConsumiMatch[4]);
                         data.consumoF2Periodo = parseInt(periodoConsumiMatch[2]) + parseInt(periodoConsumiMatch[5]);
                         data.consumoF3Periodo = parseInt(periodoConsumiMatch[3]) + parseInt(periodoConsumiMatch[6]);
+                    } else {
+                        // Try sintesi format: from CONSUMO STORICO table - last 3 months summed
+                        const consumiStoricoMatches = [...text.matchAll(/(\w{3})-2024\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/g)];
+                        if (consumiStoricoMatches.length >= 2) {
+                            // Sum last 2-3 months based on periodo
+                            const lastMonths = consumiStoricoMatches.slice(-3); // Get last 3 months
+                            data.consumoF1Periodo = lastMonths.reduce((sum, m) => sum + parseInt(m[2]), 0);
+                            data.consumoF2Periodo = lastMonths.reduce((sum, m) => sum + parseInt(m[3]), 0);
+                            data.consumoF3Periodo = lastMonths.reduce((sum, m) => sum + parseInt(m[4]), 0);
+                        }
                     }
 
                     // Extract Potenza impegnata
@@ -214,7 +288,7 @@
                     }
 
                     // Extract spesa vendita energia (MATERIA ENERGIA)
-                    // Try multiple patterns to catch it
+                    // Try multiple patterns to catch different formats
                     let spesaVenditaMatch = text.match(/Spesa\s+per\s+la\s+materia\s+energia\s+€\s+([\d,]+)/i);
                     if (!spesaVenditaMatch) {
                         spesaVenditaMatch = text.match(/di\s+cui\s+spesa\s+per\s+vendita\s+energia\s+elettrica\s+[\d,]+\s+€\/kWh\s+([\d,]+)\s+€/i);
@@ -227,10 +301,22 @@
                         data.materiaEnergia = data.spesaVenditaEnergia;
                     }
 
-                    // Extract spesa rete e oneri - from QUOTA PER CONSUMI section
-                    const spesaReteConsumiMatch = text.match(/QUOTA\s+PER\s+CONSUMI.*?di\s+cui\s+spesa\s+per\s+la\s+rete\s+e\s+gli\s+oneri.*?([\d,]+)\s+€/s);
+                    // Extract spesa rete e oneri - multiple patterns
+                    let spesaReteConsumiMatch = text.match(/QUOTA\s+PER\s+CONSUMI.*?di\s+cui\s+spesa\s+per\s+la\s+rete\s+e\s+gli\s+oneri.*?([\d,]+)\s+€/s);
+                    if (!spesaReteConsumiMatch) {
+                        // Try sintesi format: "Spesa per il trasporto e la gestione del contatore € 30,02"
+                        spesaReteConsumiMatch = text.match(/Spesa\s+per\s+il\s+trasporto\s+e\s+la\s+gestione\s+del\s+contatore\s+€\s+([\d,]+)/i);
+                    }
                     if (spesaReteConsumiMatch) {
                         data.spesaReteOneri = parseFloat(spesaReteConsumiMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract oneri di sistema from sintesi
+                    if (data.spesaReteOneri === 0) {
+                        const oneriSistemaMatch = text.match(/Spesa\s+per\s+gli\s+oneri\s+di\s+sistema\s+€\s+([\d,]+)/i);
+                        if (oneriSistemaMatch) {
+                            data.oneriGenerali = parseFloat(oneriSistemaMatch[1].replace(',', '.'));
+                        }
                     }
 
                     // Extract Quota fissa (can be negative)
@@ -252,9 +338,19 @@
                     }
 
                     // Extract separate Accise (Totale Imposte)
-                    const acciseMatch = text.match(/Totale\s+Imposte\s+([\d,]+)\s+€/i);
+                    let acciseMatch = text.match(/Totale\s+Imposte\s+([\d,]+)\s+€/i);
+                    if (!acciseMatch) {
+                        // Try sintesi format: "Imposte € 4,11"
+                        acciseMatch = text.match(/Imposte\s+€\s+([\d,]+)/i);
+                    }
                     if (acciseMatch) {
                         data.accise = parseFloat(acciseMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract IVA from sintesi
+                    const ivaMatch = text.match(/IVA\s+€\s+([\d,]+)/i);
+                    if (ivaMatch) {
+                        data.iva = parseFloat(ivaMatch[1].replace(',', '.'));
                     }
 
                     // Extract Oneri generali di sistema
@@ -263,10 +359,10 @@
                         data.oneriGenerali = parseFloat(oneriMatch[1].replace(',', '.'));
                     }
 
-                    // Calcola IVA (10% su totale imponibile)
-                    if (data.acciseIva > 0 && data.accise > 0) {
+                    // Calcola IVA se non trovata (10% su totale imponibile)
+                    if (data.iva === 0 && data.acciseIva > 0 && data.accise > 0) {
                         data.iva = data.acciseIva - data.accise;
-                    } else if (data.totaleNettoBolletta > 0) {
+                    } else if (data.iva === 0 && data.totaleNettoBolletta > 0) {
                         // Stima IVA al 10%
                         data.iva = data.totaleNettoBolletta * 0.10 / 1.10;
                     }
@@ -313,14 +409,28 @@
 
                     // CALCOLI DERIVATI
                     
-                    // Spese altre = rete + oneri + quota fissa + quota potenza
-                    data.speseAltre = data.spesaReteOneri + data.quotaFissa + data.quotaPotenza;
-                    if (data.oneriGenerali > 0) {
-                        data.speseAltre += data.oneriGenerali;
+                    // Spese altre = trasporto + oneri (per sintesi) O rete + oneri + quota fissa + quota potenza (per dettaglio)
+                    if (data.spesaReteOneri > 0 && data.oneriGenerali > 0) {
+                        // Sintesi format: spesaReteOneri = trasporto, oneriGenerali = oneri
+                        data.speseAltre = data.spesaReteOneri + data.oneriGenerali + data.quotaFissa + data.quotaPotenza;
+                    } else if (data.spesaReteOneri > 0) {
+                        // Dettaglio format: spesaReteOneri includes everything
+                        data.speseAltre = data.spesaReteOneri + data.quotaFissa + data.quotaPotenza;
+                        if (data.oneriGenerali > 0) {
+                            data.speseAltre += data.oneriGenerali;
+                        }
+                    } else {
+                        // Fallback
+                        data.speseAltre = data.quotaFissa + data.quotaPotenza + data.oneriGenerali;
                     }
 
                     // Somme importi = materia energia + spese altre + accise
                     data.sommeImporti = data.materiaEnergia + data.speseAltre + (data.accise || 0);
+
+                    // TOT kWh = sum F1 + F2 + F3 if not already set
+                    if (data.consumoTotalePeriodo === 0 && (data.consumoF1Periodo || data.consumoF2Periodo || data.consumoF3Periodo)) {
+                        data.consumoTotalePeriodo = data.consumoF1Periodo + data.consumoF2Periodo + data.consumoF3Periodo;
+                    }
 
                     // Costo/kWh pulito = (Totale bolletta - Canone - IVA) / kWh
                     if (data.consumoTotalePeriodo > 0) {
@@ -352,80 +462,6 @@
                 }
 
                 return data;
-            };
-
-            const [isDragging, setIsDragging] = React.useState(false);
-
-            const handleDragEnter = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setIsDragging(true);
-            };
-
-            const handleDragLeave = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setIsDragging(false);
-            };
-
-            const handleDragOver = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-            };
-
-            const handleDrop = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setIsDragging(false);
-                
-                const files = e.dataTransfer.files;
-                if (files && files.length > 0) {
-                    // Create a fake event object to reuse handleFileUpload
-                    const fakeEvent = {
-                        target: {
-                            files: files,
-                            value: ''
-                        }
-                    };
-                    handleFileUpload(fakeEvent);
-                }
-            };
-
-            // Drag and drop handlers
-            const handleDragOver = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setIsDragging(true);
-            };
-
-            const handleDragLeave = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setIsDragging(false);
-            };
-
-            const handleDrop = (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setIsDragging(false);
-                
-                const files = e.dataTransfer.files;
-                if (files && files.length > 0) {
-                    const fakeEvent = { target: { files: files, value: '' } };
-                    handleFileUpload(fakeEvent);
-                }
-            };
-
-            // Sort bills by date
-            const toggleSort = () => {
-                const newOrder = sortOrder === 'desc' ? 'asc' : 'desc';
-                setSortOrder(newOrder);
-                const sorted = [...allBills].sort((a, b) => {
-                    const dateA = new Date(a.dataInizio.split('/').reverse().join('-'));
-                    const dateB = new Date(b.dataInizio.split('/').reverse().join('-'));
-                    return newOrder === 'asc' ? dateA - dateB : dateB - dateA;
-                });
-                setAllBills(sorted);
             };
 
             const handleFileUpload = async (event) => {
@@ -911,12 +947,12 @@
                                     onChange={handleFileUpload}
                                     style={{ display: 'none' }}
                                 />
-                                <FileText size={isDragging ? 56 : 48} color="#3b82f6" style={{ marginBottom: '1rem', transition: 'all 0.3s' }} />
-                                <div style={{ color: 'white', fontSize: '1.1rem', fontWeight: '600', marginBottom: '0.5rem' }}>
+                                <FileText />
+                                <div style={{ color: 'white', fontSize: '1.1rem', fontWeight: '600', marginBottom: '0.5rem', marginTop: '1rem' }}>
                                     {isDragging ? '📂 Rilascia qui i PDF!' : '🖱️ Clicca o trascina qui i PDF'}
                                 </div>
                                 <div style={{ color: '#94a3b8', fontSize: '0.9rem' }}>
-                                    ✨ Drag & Drop supportato • Selezione multipla
+                                    ✨ Drag & Drop • Selezione multipla
                                 </div>
                             </label>
 
@@ -1111,8 +1147,8 @@
                                             boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
                                         }}
                                     >
-                                        <i data-lucide={sortOrder === 'desc' ? 'arrow-down' : 'arrow-up'}></i>
-                                        Ordina per Data {sortOrder === 'desc' ? '↓' : '↑'}
+                                        <i data-lucide="arrow-down-up"></i>
+                                        {sortOrder === 'desc' ? '↓ Nuove→Vecchie' : '↑ Vecchie→Nuove'}
                                     </button>
                                     
                                     <button
