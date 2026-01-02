@@ -130,6 +130,7 @@
                     periodoCompetenza: '',
                     dataInizio: '',
                     dataFine: '',
+                    tipoFattura: '', // 'Sintesi' o 'Dettaglio'
                     
                     // Consumi
                     consumoTotalePeriodo: 0,
@@ -189,6 +190,17 @@
                 };
 
                 try {
+                    // Detect tipo fattura
+                    if (text.includes('ALLEGATO DI DETTAGLIO')) {
+                        data.tipoFattura = 'Dettaglio';
+                    } else if (text.includes('TOTALE DA PAGARE') && text.includes('Consumo totale fatturato')) {
+                        data.tipoFattura = 'Sintesi';
+                    } else if (text.includes('RIEPILOGO FATTURA')) {
+                        data.tipoFattura = 'Sintesi';
+                    } else {
+                        data.tipoFattura = 'Non riconosciuto';
+                    }
+
                     // Extract Numero Fattura - multiple patterns
                     let fatturaMatch = text.match(/N\.\s*Fattura\s+elettronica\s+valida\s+ai\s+fini\s+fiscali\s+(\d{12})/i);
                     if (!fatturaMatch) {
@@ -202,6 +214,14 @@
                     if (!periodoMatch) {
                         // Try sintesi format: "Periodo di riferimento: 01/11/2024 - 31/12/2024"
                         periodoMatch = text.match(/Periodo\s+di\s+riferimento:\s+(\d{2}\/\d{2}\/\d{4})\s*-\s*(\d{2}\/\d{2}\/\d{4})/i);
+                    }
+                    if (!periodoMatch) {
+                        // Try 2025 format: "Periodo di competenza 01/07/2025 - 31/08/2025"
+                        periodoMatch = text.match(/Periodo\s+di\s+competenza\s+(\d{2}\/\d{2}\/\d{4})\s+-\s+(\d{2}\/\d{2}\/\d{4})/i);
+                    }
+                    if (!periodoMatch) {
+                        // Try 2025 Dettaglio format: "PERIODO 01/07/2025 - 31/08/2025"
+                        periodoMatch = text.match(/PERIODO\s+(\d{2}\/\d{2}\/\d{4})\s+-\s+(\d{2}\/\d{2}\/\d{4})/i);
                     }
                     if (periodoMatch) {
                         data.periodoCompetenza = `${periodoMatch[1]} - ${periodoMatch[2]}`;
@@ -220,13 +240,31 @@
                     }
 
                     // Extract Canone TV - multiple patterns
-                    let canoneMatch = text.match(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?([\d,]+)\s*€/i);
+                    let canoneMatch = null;
+                    
+                    // Try 2025 format first (most specific): "Canone...mese 02 / 2025 € 9,00"
+                    canoneMatch = text.match(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?mese\s+\d+\s+\/\s+\d{4}\s+€\s+([\d,]+)/i);
+                    
                     if (!canoneMatch) {
-                        // Try with "€ 9,00" format (sintesi)
-                        canoneMatch = text.match(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?€\s+([\d,]+)/i);
+                        // Try with "€ 9,00" format (sintesi) - avoid capturing year
+                        canoneMatch = text.match(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?€\s+(\d{1,2},\d{2})/i);
                     }
+                    
+                    if (!canoneMatch) {
+                        // Try older format: "9,00 €" - only match valid amounts (X,XX format)
+                        canoneMatch = text.match(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?(\d{1,2},\d{2})\s+€/i);
+                    }
+                    
                     if (canoneMatch) {
-                        data.canoneTV = parseFloat(canoneMatch[1].replace(',', '.'));
+                        const canoneValue = parseFloat(canoneMatch[1].replace(',', '.'));
+                        // 2025 format has 2 months: check if there are multiple canone entries
+                        const allCanoneMatches = [...text.matchAll(/Canone\s+di\s+abbonamento\s+alla\s+televisione.*?€\s+(\d{1,2},\d{2})/gi)];
+                        if (allCanoneMatches.length >= 2) {
+                            // Sum all canone entries
+                            data.canoneTV = allCanoneMatches.reduce((sum, m) => sum + parseFloat(m[1].replace(',', '.')), 0);
+                        } else {
+                            data.canoneTV = canoneValue;
+                        }
                     }
 
                     // Extract Totale bolletta (senza canone) - multiple patterns
@@ -234,6 +272,10 @@
                     if (!totaleBollettaMatch) {
                         // Try sintesi format: "TOTALE € 101,26" from RIEPILOGO FATTURA
                         totaleBollettaMatch = text.match(/TOTALE\s+€\s+([\d,]+)/i);
+                    }
+                    if (!totaleBollettaMatch) {
+                        // Try 2025 format: look for "Totale bolletta" in SCONTRINO section
+                        totaleBollettaMatch = text.match(/Totale\s+bolletta\s+([\d,]+)\s+€/i);
                     }
                     if (totaleBollettaMatch) {
                         data.totaleNettoBolletta = parseFloat(totaleBollettaMatch[1].replace(',', '.'));
@@ -263,14 +305,32 @@
                         data.consumoF2Periodo = parseInt(periodoConsumiMatch[2]) + parseInt(periodoConsumiMatch[5]);
                         data.consumoF3Periodo = parseInt(periodoConsumiMatch[3]) + parseInt(periodoConsumiMatch[6]);
                     } else {
-                        // Try sintesi format: from CONSUMO STORICO table - last 3 months summed
-                        const consumiStoricoMatches = [...text.matchAll(/(\w{3})-2024\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/g)];
-                        if (consumiStoricoMatches.length >= 2) {
-                            // Sum last 2-3 months based on periodo
-                            const lastMonths = consumiStoricoMatches.slice(-3); // Get last 3 months
-                            data.consumoF1Periodo = lastMonths.reduce((sum, m) => sum + parseInt(m[2]), 0);
-                            data.consumoF2Periodo = lastMonths.reduce((sum, m) => sum + parseInt(m[3]), 0);
-                            data.consumoF3Periodo = lastMonths.reduce((sum, m) => sum + parseInt(m[4]), 0);
+                        // Try 2025 Sintesi format: "Feb-2025 Effettivo 41 76 75" + "Gen-2025 Effettivo 68 82 85"
+                        const consumo2025SintesiMatches = [...text.matchAll(/(?:Gen|Feb|Mar|Apr|Mag|Giu|Lug|Ago|Set|Ott|Nov|Dic)-\d{4}\s+Effettivo\s+(\d+)\s+(\d+)\s+(\d+)/g)];
+                        if (consumo2025SintesiMatches.length >= 1) {
+                            // Sum all months in the period
+                            data.consumoF1Periodo = consumo2025SintesiMatches.reduce((sum, m) => sum + parseInt(m[1]), 0);
+                            data.consumoF2Periodo = consumo2025SintesiMatches.reduce((sum, m) => sum + parseInt(m[2]), 0);
+                            data.consumoF3Periodo = consumo2025SintesiMatches.reduce((sum, m) => sum + parseInt(m[3]), 0);
+                        } else {
+                            // Try 2025 Sintesi full month format: "Agosto 2025 Effettivo 40 105 114"
+                            const consumo2025Matches = [...text.matchAll(/(?:Luglio|Agosto|Settembre|Ottobre|Novembre|Dicembre|Gennaio|Febbraio|Marzo|Aprile|Maggio|Giugno)\s+\d{4}\s+Effettivo\s+(\d+)\s+(\d+)\s+(\d+)/g)];
+                            if (consumo2025Matches.length >= 1) {
+                                // Sum all months in the period
+                                data.consumoF1Periodo = consumo2025Matches.reduce((sum, m) => sum + parseInt(m[1]), 0);
+                                data.consumoF2Periodo = consumo2025Matches.reduce((sum, m) => sum + parseInt(m[2]), 0);
+                                data.consumoF3Periodo = consumo2025Matches.reduce((sum, m) => sum + parseInt(m[3]), 0);
+                            } else {
+                                // Try sintesi format: from CONSUMO STORICO table - last 3 months summed
+                                const consumiStoricoMatches = [...text.matchAll(/(\w{3})-2024\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/g)];
+                                if (consumiStoricoMatches.length >= 2) {
+                                    // Sum last 2-3 months based on periodo
+                                    const lastMonths = consumiStoricoMatches.slice(-3); // Get last 3 months
+                                    data.consumoF1Periodo = lastMonths.reduce((sum, m) => sum + parseInt(m[2]), 0);
+                                    data.consumoF2Periodo = lastMonths.reduce((sum, m) => sum + parseInt(m[3]), 0);
+                                    data.consumoF3Periodo = lastMonths.reduce((sum, m) => sum + parseInt(m[4]), 0);
+                                }
+                            }
                         }
                     }
 
@@ -296,7 +356,23 @@
                     if (!spesaVenditaMatch) {
                         spesaVenditaMatch = text.match(/di\s+cui\s+spesa\s+per\s+la\s+quota\s+per\s+consumi\s+([\d,]+)\s+€/i);
                     }
-                    if (spesaVenditaMatch) {
+                    if (!spesaVenditaMatch) {
+                        // Try 2025 format from SCONTRINO: "di cui spesa per vendita energia elettrica 0,145317 €/kWh 71,06 €"
+                        spesaVenditaMatch = text.match(/di\s+cui\s+spesa\s+per\s+vendita\s+energia\s+elettrica\s+([\d,]+)\s+€\/kWh\s+([\d,]+)\s+€/i);
+                        if (spesaVenditaMatch) {
+                            // Take the total amount (second capture group)
+                            data.spesaVenditaEnergia = parseFloat(spesaVenditaMatch[2].replace(',', '.'));
+                            data.materiaEnergia = data.spesaVenditaEnergia;
+                        }
+                    }
+                    if (!spesaVenditaMatch || data.materiaEnergia === 0) {
+                        // Try 2025 Dettaglio format: sum "TOTALE SPESA PER LA VENDITA DI ENERGIA ELETTRICA"
+                        const totaleVenditaMatch = text.match(/TOTALE\s+SPESA\s+PER\s+LA\s+VENDITA\s+DI\s+ENERGIA\s+ELETTRICA\s+([\d,]+)\s+€/i);
+                        if (totaleVenditaMatch) {
+                            data.spesaVenditaEnergia = parseFloat(totaleVenditaMatch[1].replace(',', '.'));
+                            data.materiaEnergia = data.spesaVenditaEnergia;
+                        }
+                    } else if (spesaVenditaMatch && !data.materiaEnergia) {
                         data.spesaVenditaEnergia = parseFloat(spesaVenditaMatch[1].replace(',', '.'));
                         data.materiaEnergia = data.spesaVenditaEnergia;
                     }
@@ -307,15 +383,35 @@
                         // Try sintesi format: "Spesa per il trasporto e la gestione del contatore € 30,02"
                         spesaReteConsumiMatch = text.match(/Spesa\s+per\s+il\s+trasporto\s+e\s+la\s+gestione\s+del\s+contatore\s+€\s+([\d,]+)/i);
                     }
-                    if (spesaReteConsumiMatch) {
+                    if (!spesaReteConsumiMatch) {
+                        // Try 2025 SCONTRINO format: "di cui spesa per la rete e gli oneri generali di sistema 0,044847 €/kWh 21,93 €"
+                        spesaReteConsumiMatch = text.match(/di\s+cui\s+spesa\s+per\s+la\s+rete\s+e\s+gli\s+oneri\s+generali\s+di\s+sistema\s+([\d,]+)\s+€\/kWh\s+([\d,]+)\s+€/i);
+                        if (spesaReteConsumiMatch) {
+                            data.spesaReteOneri = parseFloat(spesaReteConsumiMatch[2].replace(',', '.'));
+                        }
+                    }
+                    if (!spesaReteConsumiMatch || data.spesaReteOneri === 0) {
+                        // Try 2025 Dettaglio: "TOTALE SPESA PER IL TRASPORTO E LA GESTIONE DEL CONTATORE"
+                        const totaleTrasportoMatch = text.match(/TOTALE\s+SPESA\s+PER\s+IL\s+TRASPORTO\s+E\s+LA\s+GESTIONE\s+DEL\s+CONTATORE\s+([\d,]+)\s+€/i);
+                        if (totaleTrasportoMatch) {
+                            data.spesaReteOneri = parseFloat(totaleTrasportoMatch[1].replace(',', '.'));
+                        }
+                    } else if (spesaReteConsumiMatch && !data.spesaReteOneri) {
                         data.spesaReteOneri = parseFloat(spesaReteConsumiMatch[1].replace(',', '.'));
                     }
 
-                    // Extract oneri di sistema from sintesi
-                    if (data.spesaReteOneri === 0) {
+                    // Extract oneri di sistema
+                    if (data.oneriGenerali === 0) {
                         const oneriSistemaMatch = text.match(/Spesa\s+per\s+gli\s+oneri\s+di\s+sistema\s+€\s+([\d,]+)/i);
                         if (oneriSistemaMatch) {
                             data.oneriGenerali = parseFloat(oneriSistemaMatch[1].replace(',', '.'));
+                        }
+                    }
+                    if (data.oneriGenerali === 0) {
+                        // Try 2025 Dettaglio: "TOTALE SPESA PER GLI ONERI DI SISTEMA"
+                        const totaleOneriMatch = text.match(/TOTALE\s+SPESA\s+PER\s+GLI\s+ONERI\s+DI\s+SISTEMA\s+([\d,]+)\s+€/i);
+                        if (totaleOneriMatch) {
+                            data.oneriGenerali = parseFloat(totaleOneriMatch[1].replace(',', '.'));
                         }
                     }
 
@@ -343,6 +439,10 @@
                         // Try sintesi format: "Imposte € 4,11"
                         acciseMatch = text.match(/Imposte\s+€\s+([\d,]+)/i);
                     }
+                    if (!acciseMatch) {
+                        // Try 2025 Dettaglio: "TOTALE ACCISE"
+                        acciseMatch = text.match(/TOTALE\s+ACCISE\s+([\d,]+)\s+€/i);
+                    }
                     if (acciseMatch) {
                         data.accise = parseFloat(acciseMatch[1].replace(',', '.'));
                     }
@@ -351,6 +451,14 @@
                     const ivaMatch = text.match(/IVA\s+€\s+([\d,]+)/i);
                     if (ivaMatch) {
                         data.iva = parseFloat(ivaMatch[1].replace(',', '.'));
+                    }
+
+                    // Extract Totale Imponibile for 2025 Dettaglio
+                    if (data.totaleNettoBolletta === 0) {
+                        const totaleImponibileMatch = text.match(/TOTALE\s+IMPONIBILE\s+([\d,]+)\s+€/i);
+                        if (totaleImponibileMatch) {
+                            data.totaleNettoBolletta = parseFloat(totaleImponibileMatch[1].replace(',', '.'));
+                        }
                     }
 
                     // Extract Oneri generali di sistema
@@ -407,6 +515,16 @@
                         data.punF3.push(parseFloat(match[1].replace(',', '.')));
                     }
 
+                    // For Dettaglio format: mark missing fields as N/A
+                    if (data.tipoFattura === 'Dettaglio') {
+                        // Dettaglio doesn't have these fields - estimate or mark N/A
+                        if (data.totaleDaPagare === 0 && data.totaleNettoBolletta > 0) {
+                            // Estimate: Imponibile + IVA 10%
+                            data.totaleDaPagare = data.totaleNettoBolletta * 1.10;
+                        }
+                        // Canone is not in Dettaglio - leave as 0
+                    }
+
                     // CALCOLI DERIVATI
                     
                     // Spese altre = trasporto + oneri (per sintesi) O rete + oneri + quota fissa + quota potenza (per dettaglio)
@@ -432,10 +550,12 @@
                         data.consumoTotalePeriodo = data.consumoF1Periodo + data.consumoF2Periodo + data.consumoF3Periodo;
                     }
 
-                    // Costo/kWh pulito = (Totale bolletta - Canone - IVA) / kWh
+                    // Costo/kWh pulito = Imponibile / kWh (senza IVA e Canone)
                     if (data.consumoTotalePeriodo > 0) {
-                        const costoNetto = data.totaleNettoBolletta - data.canoneTV - data.iva;
-                        data.costoKwh = costoNetto / data.consumoTotalePeriodo;
+                        // Use sommeImporti (materia + spese altre + accise) as base
+                        // This is the imponibile = total before IVA and Canone
+                        const imponibile = data.materiaEnergia + data.speseAltre + (data.accise || 0);
+                        data.costoKwh = imponibile / data.consumoTotalePeriodo;
                         
                         // Costo SOLO materia energia per kWh
                         data.costoMateriaKwh = data.materiaEnergia / data.consumoTotalePeriodo;
@@ -1237,6 +1357,7 @@
                                             letterSpacing: '0.05em'
                                         }}>
                                             <th style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Gestore</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Tipo</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Potenza</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Fattura</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Periodo</th>
@@ -1266,6 +1387,7 @@
                                                 color: 'white'
                                             }}>
                                                 <td style={{ padding: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.fornitore}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'center', fontSize: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.05)', color: bill.tipoFattura === 'Sintesi' ? '#10b981' : '#3b82f6' }}>{bill.tipoFattura || 'N/A'}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.potenzaImpegnata}</td>
                                                 <td style={{ padding: '0.75rem', fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.numeroFattura}</td>
                                                 <td style={{ padding: '0.75rem', fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.periodoCompetenza}</td>
@@ -1308,7 +1430,7 @@
                                     ℹ️ <strong style={{color: '#f59e0b'}}>Copia</strong> direttamente in Google Sheets, oppure scarica in <strong style={{color: '#10b981'}}>Excel</strong> o <strong style={{color: '#8b5cf6'}}>CSV</strong>
                                 </div>
                                 <div style={{ color: '#3b82f6', fontWeight: '600' }}>
-                                    {allBills.length} bolletta{allBills.length !== 1 ? 'e' : ''} pronta{allBills.length !== 1 ? 'e' : ''} per l'export
+                                    {allBills.length} {allBills.length === 1 ? 'bolletta pronta' : 'bollette pronte'} per l'export
                                 </div>
                             </div>
                         </div>
