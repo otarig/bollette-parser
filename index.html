@@ -341,7 +341,11 @@
                     }
 
                     // Extract Potenza impegnata
-                    const potenzaMatch = text.match(/Potenza\s+impegnata\s+([\d,]+)\s+kW/i);
+                    let potenzaMatch = text.match(/Potenza\s+impegnata\s+([\d,]+)\s+kW/i);
+                    if (!potenzaMatch) {
+                        // Try alternative pattern from SCONTRINO: "3,00 Kw per 2 Mesi x 2,106667 €/kW/Mese"
+                        potenzaMatch = text.match(/([\d,]+)\s+Kw\s+per\s+\d+\s+Mesi\s+x/i);
+                    }
                     if (potenzaMatch) {
                         data.potenzaImpegnata = parseFloat(potenzaMatch[1].replace(',', '.'));
                     }
@@ -356,31 +360,39 @@
                     // Extract spesa vendita energia (MATERIA ENERGIA)
                     // Try multiple patterns to catch different formats
                     let spesaVenditaMatch = text.match(/Spesa\s+per\s+la\s+materia\s+energia\s+€\s+([\d,]+)/i);
+                    
                     if (!spesaVenditaMatch) {
-                        spesaVenditaMatch = text.match(/di\s+cui\s+spesa\s+per\s+vendita\s+energia\s+elettrica\s+[\d,]+\s+€\/kWh\s+([\d,]+)\s+€/i);
-                    }
-                    if (!spesaVenditaMatch) {
-                        spesaVenditaMatch = text.match(/di\s+cui\s+spesa\s+per\s+la\s+quota\s+per\s+consumi\s+([\d,]+)\s+€/i);
-                    }
-                    if (!spesaVenditaMatch) {
-                        // Try 2025 format from SCONTRINO: "di cui spesa per vendita energia elettrica 0,145317 €/kWh 71,06 €"
+                        // Try 2025 SCONTRINO format: "di cui spesa per vendita energia elettrica 0,145317 €/kWh 71,06 €"
                         spesaVenditaMatch = text.match(/di\s+cui\s+spesa\s+per\s+vendita\s+energia\s+elettrica\s+([\d,]+)\s+€\/kWh\s+([\d,]+)\s+€/i);
                         if (spesaVenditaMatch) {
                             // Take the total amount (second capture group)
-                            data.spesaVenditaEnergia = parseFloat(spesaVenditaMatch[2].replace(',', '.'));
-                            data.materiaEnergia = data.spesaVenditaEnergia;
+                            data.materiaEnergia = parseFloat(spesaVenditaMatch[2].replace(',', '.'));
+                            data.spesaVenditaEnergia = data.materiaEnergia;
                         }
                     }
-                    if (!spesaVenditaMatch || data.materiaEnergia === 0) {
-                        // Try 2025 Dettaglio format: sum "TOTALE SPESA PER LA VENDITA DI ENERGIA ELETTRICA"
-                        const totaleVenditaMatch = text.match(/TOTALE\s+SPESA\s+PER\s+LA\s+VENDITA\s+DI\s+ENERGIA\s+ELETTRICA\s+([\d,]+)\s+€/i);
-                        if (totaleVenditaMatch) {
-                            data.spesaVenditaEnergia = parseFloat(totaleVenditaMatch[1].replace(',', '.'));
-                            data.materiaEnergia = data.spesaVenditaEnergia;
+                    
+                    if (!spesaVenditaMatch) {
+                        // Try BOX OFFERTA format: "di cui spesa per la quota per consumi 71,06 €"
+                        spesaVenditaMatch = text.match(/di\s+cui\s+spesa\s+per\s+la\s+quota\s+per\s+consumi\s+([\d,]+)\s+€/i);
+                        if (spesaVenditaMatch) {
+                            data.materiaEnergia = parseFloat(spesaVenditaMatch[1].replace(',', '.'));
+                            data.spesaVenditaEnergia = data.materiaEnergia;
                         }
-                    } else if (spesaVenditaMatch && !data.materiaEnergia) {
-                        data.spesaVenditaEnergia = parseFloat(spesaVenditaMatch[1].replace(',', '.'));
-                        data.materiaEnergia = data.spesaVenditaEnergia;
+                    }
+                    
+                    if (!spesaVenditaMatch) {
+                        // Try 2025 Dettaglio format: "TOTALE SPESA PER LA VENDITA DI ENERGIA ELETTRICA"
+                        spesaVenditaMatch = text.match(/TOTALE\s+SPESA\s+PER\s+LA\s+VENDITA\s+DI\s+ENERGIA\s+ELETTRICA\s+([\d,]+)\s+€/i);
+                        if (spesaVenditaMatch) {
+                            data.materiaEnergia = parseFloat(spesaVenditaMatch[1].replace(',', '.'));
+                            data.spesaVenditaEnergia = data.materiaEnergia;
+                        }
+                    }
+                    
+                    // Fallback: if still not found, try simple pattern
+                    if (!data.materiaEnergia && spesaVenditaMatch) {
+                        data.materiaEnergia = parseFloat(spesaVenditaMatch[1].replace(',', '.'));
+                        data.spesaVenditaEnergia = data.materiaEnergia;
                     }
 
                     // Extract spesa rete e oneri - multiple patterns
