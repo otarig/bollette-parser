@@ -344,7 +344,8 @@
                     let potenzaMatch = text.match(/Potenza\s+impegnata\s+([\d,]+)\s+kW/i);
                     if (!potenzaMatch) {
                         // Try alternative pattern from SCONTRINO: "3,00 Kw per 2 Mesi x 2,106667 €/kW/Mese"
-                        potenzaMatch = text.match(/([\d,]+)\s+Kw\s+per\s+\d+\s+Mesi\s+x/i);
+                        // Match both "Kw" and "kW" (case insensitive)
+                        potenzaMatch = text.match(/([\d,]+)\s+[Kk][Ww]\s+per\s+\d+\s+Mesi\s+x/i);
                     }
                     if (potenzaMatch) {
                         data.potenzaImpegnata = parseFloat(potenzaMatch[1].replace(',', '.'));
@@ -535,12 +536,22 @@
 
                     // For Dettaglio format: mark missing fields as N/A
                     if (data.tipoFattura === 'Dettaglio') {
-                        // Dettaglio doesn't have these fields - estimate or mark N/A
-                        if (data.totaleDaPagare === 0 && data.totaleNettoBolletta > 0) {
-                            // Estimate: Imponibile + IVA 10%
-                            data.totaleDaPagare = data.totaleNettoBolletta * 1.10;
+                        // Dettaglio has TOTALE IMPONIBILE which goes to Netto
+                        // totaleNettoBolletta already contains the imponibile from extraction
+                        
+                        // Mark missing fields with null (will display as N/A in table)
+                        if (data.totaleDaPagare === 0) {
+                            data.totaleDaPagare = null; // N/A
                         }
-                        // Canone is not in Dettaglio - leave as 0
+                        if (data.canoneTV === 0) {
+                            data.canoneTV = null; // N/A
+                        }
+                        if (data.iva === 0) {
+                            data.iva = null; // N/A
+                        }
+                        if (data.totaleBolletta === 0) {
+                            data.totaleBolletta = null; // N/A
+                        }
                     }
 
                     // CALCOLI DERIVATI
@@ -584,8 +595,10 @@
                         const dateInizio = new Date(data.dataInizio.split('/').reverse().join('-'));
                         const dateFine = new Date(data.dataFine.split('/').reverse().join('-'));
                         const giorni = Math.ceil((dateFine - dateInizio) / (1000 * 60 * 60 * 24)) + 1;
-                        if (giorni > 0) {
+                        if (giorni > 0 && data.totaleDaPagare !== null) {
                             data.costoCorrenteTotGiorno = data.totaleDaPagare / giorni;
+                        } else {
+                            data.costoCorrenteTotGiorno = null; // N/A for Dettaglio
                         }
                     }
 
@@ -1028,6 +1041,60 @@
                         }}>
                             Analizza automaticamente le tue bollette dell'energia elettrica
                         </p>
+                        
+                        {/* Instructions box */}
+                        <div style={{
+                            marginTop: '2rem',
+                            padding: '1.5rem',
+                            background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1))',
+                            borderRadius: '12px',
+                            border: '1px solid rgba(59, 130, 246, 0.3)',
+                            maxWidth: '900px',
+                            marginLeft: 'auto',
+                            marginRight: 'auto'
+                        }}>
+                            <h3 style={{
+                                color: '#3b82f6',
+                                fontSize: '1.1rem',
+                                fontWeight: '600',
+                                marginTop: 0,
+                                marginBottom: '1rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem'
+                            }}>
+                                <span style={{fontSize: '1.3rem'}}>ℹ️</span>
+                                Istruzioni importanti
+                            </h3>
+                            <div style={{
+                                color: '#e2e8f0',
+                                fontSize: '0.95rem',
+                                lineHeight: '1.6'
+                            }}>
+                                <p style={{marginTop: 0, marginBottom: '0.75rem'}}>
+                                    <strong style={{color: '#60a5fa'}}>📄 Carica solo le fatture SINTESI</strong>
+                                </p>
+                                <p style={{marginBottom: '0.75rem', paddingLeft: '1.5rem'}}>
+                                    Le bollette Illumia esistono in due versioni:
+                                </p>
+                                <ul style={{marginTop: '0.5rem', marginBottom: '1rem', paddingLeft: '3rem'}}>
+                                    <li style={{marginBottom: '0.5rem'}}>
+                                        <strong style={{color: '#10b981'}}>✅ SINTESI</strong> (5-8 pagine) → Contiene tutti i dati: totale da pagare, canone RAI, IVA, consumi. <strong>Carica questa!</strong>
+                                    </li>
+                                    <li>
+                                        <strong style={{color: '#ef4444'}}>❌ DETTAGLIO</strong> (2 pagine) → Solo calcoli tecnici, senza totale finale e canone RAI. <strong>Non caricare!</strong>
+                                    </li>
+                                </ul>
+                                <p style={{
+                                    marginBottom: 0,
+                                    paddingLeft: '1.5rem',
+                                    fontSize: '0.9rem',
+                                    color: '#94a3b8'
+                                }}>
+                                    💡 <em>Il Dettaglio serve solo per verificare i calcoli, ma per l'analisi usa sempre la Sintesi.</em>
+                                </p>
+                            </div>
+                        </div>
                     </div>
 
                     <div style={{
@@ -1376,7 +1443,7 @@
                                         }}>
                                             <th style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Gestore</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Tipo</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Potenza</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Potenza (kW)</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Fattura</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Periodo</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'center', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Da Data</th>
@@ -1384,18 +1451,18 @@
                                             <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>kWh F1</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>kWh F2</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>kWh F3</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Costo Tot</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Materia En.</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Canone RAI</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Spese Altre</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>IVA</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Sconti</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Somme Imp.</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Costo Tot (€)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Materia En. (€)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Canone RAI (€)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Spese Altre (€)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>IVA (€)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Sconti (€)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Imponibile (€)</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>TOT kWh</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>€/kWh Mat.</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>€/kWh Tot.</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Costo Netto</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>€/Giorno</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Materia (€/kWh)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Totale (€/kWh)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Netto (€)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Costo/Giorno (€/g)</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1414,18 +1481,18 @@
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.consumoF1Periodo}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.consumoF2Periodo}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.consumoF3Periodo}</td>
-                                                <td style={{ padding: '0.75rem', textAlign: 'right', color: '#10b981', fontWeight: '600', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.totaleDaPagare.toFixed(2)}</td>
-                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.materiaEnergia.toFixed(2)}</td>
-                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.canoneTV.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', color: bill.totaleDaPagare !== null ? '#10b981' : '#94a3b8', fontWeight: '600', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.totaleDaPagare !== null ? `€${bill.totaleDaPagare.toFixed(2)}` : 'N/A'}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.materiaEnergia !== null ? `€${bill.materiaEnergia.toFixed(2)}` : 'N/A'}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.canoneTV !== null ? `€${bill.canoneTV.toFixed(2)}` : 'N/A'}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.speseAltre.toFixed(2)}</td>
-                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.iva.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.iva !== null ? `€${bill.iva.toFixed(2)}` : 'N/A'}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', color: bill.sconti > 0 ? '#22c55e' : 'inherit', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.sconti.toFixed(2)}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.sommeImporti.toFixed(2)}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', fontWeight: '600', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.consumoTotalePeriodo}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', color: '#10b981', fontWeight: '600', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.costoMateriaKwh.toFixed(6)}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', color: '#3b82f6', fontWeight: '600', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.costoKwh.toFixed(6)}</td>
                                                 <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.totaleNettoBolletta.toFixed(2)}</td>
-                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>€{bill.costoCorrenteTotGiorno.toFixed(2)}</td>
+                                                <td style={{ padding: '0.75rem', textAlign: 'right', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>{bill.costoCorrenteTotGiorno !== null ? `€${bill.costoCorrenteTotGiorno.toFixed(2)}` : 'N/A'}</td>
                                             </tr>
                                         ))}
                                     </tbody>
