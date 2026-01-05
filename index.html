@@ -196,16 +196,29 @@
                 };
 
                 try {
-                    // Detect tipo fattura
-                    if (text.includes('ALLEGATO DI DETTAGLIO')) {
+                    // Detect tipo fattura - check Dettaglio first (more specific)
+                    // Dettaglio has "ALLEGATO DI DETTAGLIO - Fattura n." at the top
+                    const hasAllegato = text.includes('ALLEGATO DI DETTAGLIO');
+                    const hasTotaleImponibile = text.match(/TOTALE IMPONIBILE\s+[\d,]+\s*€/);
+                    const hasTotaleDaPagare = text.includes('TOTALE DA PAGARE');
+                    const hasScontrino = text.includes('SCONTRINO DELL\'ENERGIA');
+                    
+                    console.log(`Format detection: ALLEGATO=${hasAllegato}, IMPONIBILE=${!!hasTotaleImponibile}, TOTALE=${hasTotaleDaPagare}, SCONTRINO=${hasScontrino}`);
+                    
+                    if (hasAllegato) {
                         data.tipoFattura = 'Dettaglio';
-                    } else if (text.includes('TOTALE DA PAGARE') && text.includes('Consumo totale fatturato')) {
+                    } else if (hasTotaleImponibile && text.includes('SPESA PER LA VENDITA DI ENERGIA ELETTRICA')) {
+                        // Dettaglio has "TOTALE IMPONIBILE" as final line with amount
+                        data.tipoFattura = 'Dettaglio';
+                    } else if (hasTotaleDaPagare || text.includes('Consumo totale fatturato')) {
                         data.tipoFattura = 'Sintesi';
-                    } else if (text.includes('RIEPILOGO FATTURA')) {
+                    } else if (hasScontrino) {
                         data.tipoFattura = 'Sintesi';
                     } else {
                         data.tipoFattura = 'Non riconosciuto';
                     }
+                    
+                    console.log(`Detected format: ${data.tipoFattura}`);
 
                     // Extract Numero Fattura - multiple patterns
                     let fatturaMatch = text.match(/N\.\s*Fattura\s+elettronica\s+valida\s+ai\s+fini\s+fiscali\s+(\d{12})/i);
@@ -662,10 +675,17 @@
                         }
                         
                         console.log(`Extracted text from ${file.name}`);
+                        console.log(`First 200 chars: ${fullText.substring(0, 200)}`);
                         
                         // Parse the extracted text
                         const billData = parseBillData(fullText);
-                        processedBills.push({ ...billData, id: Date.now() + i, fileName: file.name });
+                        console.log(`Parsed ${file.name}: Tipo=${billData.tipoFattura}, Fattura=${billData.numeroFattura}, Totale=${billData.totaleDaPagare}`);
+                        
+                        processedBills.push({ 
+                            ...billData, 
+                            id: `${Date.now()}-${i}-${Math.random()}`, // More unique ID
+                            fileName: file.name 
+                        });
                         successCount++;
                         
                     } catch (err) {
@@ -1459,8 +1479,15 @@
                                             <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Sconti (€)</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Imponibile (€)</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>TOT kWh</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Materia (€/kWh)</th>
-                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Totale (€/kWh)</th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                                                <div>Materia (€/kWh)</div>
+                                                <div style={{ fontSize: '0.65em', fontWeight: 'normal', opacity: 0.7, marginTop: '0.25rem' }}>Costo energia / TOT kWh</div>
+                                            </th>
+                                            <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                                                <div>Totale (€/kWh)</div>
+                                                <div style={{ fontSize: '0.65em', fontWeight: 'normal', opacity: 0.7, marginTop: '0.25rem' }}>Imponibile / TOT kWh</div>
+                                                <div style={{ fontSize: '0.6em', fontWeight: 'normal', opacity: 0.6, marginTop: '0.15rem', fontStyle: 'italic' }}>(esclusi IVA e Canone RAI)</div>
+                                            </th>
                                             <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Netto (€)</th>
                                             <th style={{ padding: '0.75rem', textAlign: 'right', whiteSpace: 'nowrap', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>Costo/Giorno (€/g)</th>
                                         </tr>
